@@ -24,7 +24,7 @@
          Contoh: https://script.google.com/macros/s/AKfycb.../exec
     ========================================================== -->
     <script>
-      const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyUsb_9QebJ6shl3DfwZHBY8wH8ntz6w5RGU-Gwtf-6LXff0H5dtA4dQ4qd1ASJ5fg/exec";
+      const APPS_SCRIPT_URL = "PASTE_URL_DEPLOYMENT_APPS_SCRIPT_DI_SINI";
     </script>
 
     <div class="text-center mb-3">
@@ -64,7 +64,21 @@
     document.getElementById("reader").style.display = "block";
     html5QrcodeScanner = new Html5QrcodeScanner(
       "reader",
-      { fps: 10, qrbox: { width: 250, height: 150 } },
+      {
+        fps: 10,
+        qrbox: { width: 280, height: 180 },
+        aspectRatio: 1.777,
+        // Minta resolusi kamera setinggi mungkin -> modul barcode kecil jadi lebih tajam,
+        // jadi tidak perlu terlalu dekat.
+        videoConstraints: {
+          facingMode: "environment",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        // Pakai BarcodeDetector bawaan browser (Chrome Android & Safari terbaru) kalau tersedia,
+        // jauh lebih akurat & cepat daripada decoder JS bawaan library.
+        useBarCodeDetectorIfSupported: true
+      },
       false
     );
     html5QrcodeScanner.render(onScanSuccess, onScanFailure);
