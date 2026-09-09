@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan Barcode Barang</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<style>
+  body { background:#f8f9fa; }
+  .table td, .table th { vertical-align: middle; }
+  #reader { width: 100%; max-width: 400px; margin: 0 auto; display: none; }
+</style>
+</head>
+<body class="p-4">
+
+<div class="card shadow-sm mx-auto" style="max-width:500px;">
+  <div class="card-body">
+    <h4 class="card-title text-center mb-1 text-primary">Scan Barcode Barang</h4>
+    <p class="text-center text-muted small mb-4">Halaman ini terpisah dari web app Apps Script supaya kamera bisa aktif langsung.</p>
+
+    <!-- =========================================================
+         WAJIB DIISI: ganti dengan URL deployment Apps Script kamu
+         Contoh: https://script.google.com/macros/s/AKfycb.../exec
+    ========================================================== -->
+    <script>
+      const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyUsb_9QebJ6shl3DfwZHBY8wH8ntz6w5RGU-Gwtf-6LXff0H5dtA4dQ4qd1ASJ5fg/exec";
+    </script>
+
+    <div class="text-center mb-3">
+      <button class="btn btn-outline-primary" onclick="aktifkanKamera()">
+        📷 Scan Barcode via Kamera
+      </button>
+    </div>
+
+    <div id="reader" class="mb-3 rounded border"></div>
+
+    <div class="input-group mb-3">
+      <input type="text" id="searchInput" class="form-control form-control-lg" placeholder="Atau ketik Style Barang..." autofocus>
+      <button class="btn btn-primary px-4" id="btnCari" onclick="eksekusiPencarian()">Cari</button>
+    </div>
+
+    <div id="hasilPencarian" class="mt-4 table-responsive"></div>
+  </div>
+</div>
+
+<script>
+  // ==========================================
+  // CEK KONFIGURASI
+  // ==========================================
+  window.addEventListener("DOMContentLoaded", function () {
+    if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf("PASTE_URL") > -1) {
+      document.getElementById("hasilPencarian").innerHTML =
+        "<div class='alert alert-warning'>⚠️ APPS_SCRIPT_URL belum diisi. Buka file ini, isi variabel APPS_SCRIPT_URL dengan URL deployment (.../exec) Apps Script kamu.</div>";
+    }
+  });
+
+  // ==========================================
+  // LOGIKA KAMERA SCANNER
+  // ==========================================
+  let html5QrcodeScanner;
+
+  function aktifkanKamera() {
+    document.getElementById("reader").style.display = "block";
+    html5QrcodeScanner = new Html5QrcodeScanner(
+      "reader",
+      { fps: 10, qrbox: { width: 250, height: 150 } },
+      false
+    );
+    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+  }
+
+  function onScanSuccess(decodedText) {
+    document.getElementById("searchInput").value = decodedText.trim();
+    html5QrcodeScanner.clear();
+    document.getElementById("reader").style.display = "none";
+    eksekusiPencarian();
+  }
+
+  function onScanFailure(error) { /* Abaikan, ini terpanggil terus tiap frame yang gagal decode */ }
+
+  // ==========================================
+  // LOGIKA PENCARIAN (fetch ke Apps Script, bukan google.script.run)
+  // ==========================================
+  document.getElementById("searchInput").addEventListener("keyup", function (event) {
+    if (event.key === "Enter") eksekusiPencarian();
+  });
+
+  function eksekusiPencarian() {
+    var keyword = document.getElementById("searchInput").value;
+    if (!keyword) {
+      alert("Kolom pencarian tidak boleh kosong!");
+      return;
+    }
+    if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf("PASTE_URL") > -1) {
+      alert("APPS_SCRIPT_URL belum dikonfigurasi di file scanner.html");
+      return;
+    }
+
+    document.getElementById("btnCari").disabled = true;
+    document.getElementById("btnCari").innerHTML = "Mencari...";
+    document.getElementById("hasilPencarian").innerHTML =
+      "<div class='text-center text-muted mt-3'><i>⏳ Sedang menarik data dari server...</i></div>";
+
+    var url = APPS_SCRIPT_URL + "?keyword=" + encodeURIComponent(keyword);
+
+    fetch(url)
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(tampilkanHasil)
+      .catch(tampilkanError);
+  }
+
+  function tampilkanHasil(response) {
+    document.getElementById("btnCari").disabled = false;
+    document.getElementById("btnCari").innerHTML = "Cari";
+
+    if (response.error) {
+      document.getElementById("hasilPencarian").innerHTML =
+        "<div class='alert alert-danger'><b>Error Sistem:</b> " + response.error + "</div>";
+      return;
+    }
+
+    var data = response.data;
+    if (!data || data.length === 0) {
+      document.getElementById("hasilPencarian").innerHTML =
+        "<div class='alert alert-warning text-center'>Style barang tidak ditemukan.</div>";
+      return;
+    }
+
+    var html = "<table class='table table-bordered table-striped text-nowrap'>";
+    html += "<thead class='table-dark'><tr>" +
+            "<th>Barcode</th><th>Nama Barang</th><th>Brand</th><th>Status</th>" +
+            "<th>Style</th><th>Harga Jual</th><th>Size</th><th>Cup</th>" +
+            "<th>Warna</th><th>Acara</th></tr></thead><tbody>";
+
+    for (var i = 0; i < data.length; i++) {
+      var hargaMentah = parseFloat((data[i][5] || "0").toString().replace(/[^0-9.-]/g, "")) || 0;
+      var hargaRupiah = "Rp " + hargaMentah.toLocaleString('id-ID');
+
+      html += "<tr>";
+      html += "<td><strong>" + data[i][0] + "</strong></td>";
+      html += "<td>" + data[i][1] + "</td>";
+      html += "<td>" + data[i][2] + "</td>";
+      html += "<td><span class='badge bg-secondary'>" + data[i][3] + "</span></td>";
+      html += "<td class='text-primary fw-bold'>" + data[i][4] + "</td>";
+      html += "<td class='text-end'>" + hargaRupiah + "</td>";
+      html += "<td>" + data[i][6] + "</td>";
+      html += "<td>" + data[i][7] + "</td>";
+      html += "<td>" + data[i][8] + "</td>";
+      html += "<td>" + data[i][9] + "</td>";
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+
+    document.getElementById("hasilPencarian").innerHTML = html;
+    document.getElementById("searchInput").value = "";
+    document.getElementById("searchInput").focus();
+  }
+
+  function tampilkanError(error) {
+    document.getElementById("btnCari").disabled = false;
+    document.getElementById("btnCari").innerHTML = "Cari";
+    document.getElementById("hasilPencarian").innerHTML =
+      "<div class='alert alert-danger'><b>Gagal memuat komunikasi server:</b> " + error.message +
+      "<br><small>Kalau ini muncul terus, kemungkinan CORS diblokir. Coba mode JSONP (lihat catatan di bawah kode).</small></div>";
+  }
+</script>
+</body>
+</html>
