@@ -5,11 +5,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scan Barcode Barang</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<script src="https://unpkg.com/@zxing/library@latest"></script>
 <style>
   body { background:#f8f9fa; }
   .table td, .table th { vertical-align: middle; }
-  #reader { width: 100%; max-width: 400px; margin: 0 auto; display: none; }
+
+  /* ============== FULL-SCREEN SCANNER OVERLAY (ala aplikasi MDS) ============== */
+  #scannerOverlay {
+    display: none;
+    position: fixed; inset: 0; z-index: 1050;
+    background: #000;
+  }
+  #scannerOverlay.active { display: flex; flex-direction: column; }
+  #scannerTopBar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; background: #111; color: #fff;
+  }
+  #scannerVideoWrap { position: relative; flex: 1; overflow: hidden; background: #000; }
+  #scannerVideo { width: 100%; height: 100%; object-fit: cover; }
+  #scanBox {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 78%; max-width: 340px; height: 160px;
+    border: 3px solid #fff; border-radius: 8px;
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.35);
+    pointer-events: none;
+  }
+  #scannerBottomBar { background: #111; color: #ddd; padding: 12px 16px 18px; }
+  #scannerBottomBar .form-select { max-width: 320px; margin: 0 auto; }
+  #scannerInstruksi { font-size: 0.85rem; text-align:center; margin: 8px 0; color:#bbb; }
 </style>
 </head>
 <body class="p-4">
@@ -22,18 +45,17 @@
     <!-- =========================================================
          WAJIB DIISI: ganti dengan URL deployment Apps Script kamu
          Contoh: https://script.google.com/macros/s/AKfycb.../exec
+         (Kalau file lama kamu sudah pernah diisi, cek/isi ulang di sini)
     ========================================================== -->
     <script>
-      const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyUsb_9QebJ6shl3DfwZHBY8wH8ntz6w5RGU-Gwtf-6LXff0H5dtA4dQ4qd1ASJ5fg/exec";
+      const APPS_SCRIPT_URL = "PASTE_URL_DEPLOYMENT_APPS_SCRIPT_DI_SINI";
     </script>
 
     <div class="text-center mb-3">
-      <button class="btn btn-outline-primary" onclick="aktifkanKamera()">
+      <button class="btn btn-outline-primary" onclick="bukaScanner()">
         📷 Scan Barcode via Kamera
       </button>
     </div>
-
-    <div id="reader" class="mb-3 rounded border"></div>
 
     <div class="input-group mb-3">
       <input type="text" id="searchInput" class="form-control form-control-lg" placeholder="Atau ketik Style Barang..." autofocus>
@@ -41,6 +63,22 @@
     </div>
 
     <div id="hasilPencarian" class="mt-4 table-responsive"></div>
+  </div>
+</div>
+
+<!-- ============== OVERLAY SCANNER FULL-SCREEN ============== -->
+<div id="scannerOverlay">
+  <div id="scannerTopBar">
+    <strong>Scan Barcode</strong>
+    <button class="btn btn-sm btn-light" onclick="tutupScanner()">Tutup</button>
+  </div>
+  <div id="scannerVideoWrap">
+    <video id="scannerVideo" autoplay playsinline muted></video>
+    <div id="scanBox"></div>
+  </div>
+  <div id="scannerBottomBar">
+    <div id="scannerInstruksi">Arahkan kamera ke barcode dari jarak ±10–20 cm hingga terbaca otomatis.</div>
+    <select id="cameraSelect" class="form-select form-select-sm" onchange="gantiKamera(this.value)"></select>
   </div>
 </div>
 
@@ -56,45 +94,102 @@
   });
 
   // ==========================================
-  // LOGIKA KAMERA SCANNER
+  // LOGIKA KAMERA SCANNER (pakai ZXing langsung + full-screen overlay)
   // ==========================================
-  let html5QrcodeScanner;
+  const codeReader = new ZXing.BrowserMultiFormatReader();
+  let daftarKamera = [];
+  let kameraAktifId = null;
+  let sudahDapatHasil = false;
 
-  function aktifkanKamera() {
-    document.getElementById("reader").style.display = "block";
-    html5QrcodeScanner = new Html5QrcodeScanner(
-      "reader",
-      {
-        fps: 10,
-        qrbox: { width: 280, height: 180 },
-        aspectRatio: 1.777,
-        // Minta resolusi kamera setinggi mungkin -> modul barcode kecil jadi lebih tajam,
-        // jadi tidak perlu terlalu dekat.
-        videoConstraints: {
-          facingMode: "environment",
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
-        // Pakai BarcodeDetector bawaan browser (Chrome Android & Safari terbaru) kalau tersedia,
-        // jauh lebih akurat & cepat daripada decoder JS bawaan library.
-        useBarCodeDetectorIfSupported: true
-      },
-      false
-    );
-    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+  function bukaScanner() {
+    sudahDapatHasil = false;
+    document.getElementById("scannerOverlay").classList.add("active");
+
+    codeReader.listVideoInputDevices()
+      .then(function (devices) {
+        daftarKamera = devices.filter(function (d) { return d.kind === "videoinput"; });
+        isiDropdownKamera();
+
+        // Pilih otomatis kamera BELAKANG UTAMA, hindari Ultra Wide / Telephoto
+        var pilihan = pilihKameraTerbaik(daftarKamera);
+        mulaiScan(pilihan);
+      })
+      .catch(function () {
+        // Fallback kalau enumerate gagal (izin belum diberikan) -> pakai kamera environment default
+        mulaiScan(null);
+      });
   }
 
-  function onScanSuccess(decodedText) {
-    document.getElementById("searchInput").value = decodedText.trim();
-    html5QrcodeScanner.clear();
-    document.getElementById("reader").style.display = "none";
-    eksekusiPencarian();
+  function pilihKameraTerbaik(devices) {
+    if (!devices || devices.length === 0) return null;
+    var hindari = /ultra|wide angle|lebar|tele/i;
+    var belakang = /back|belakang|rear/i;
+
+    // 1) Kamera belakang yang BUKAN ultra-wide/telephoto
+    var kandidat = devices.find(function (d) {
+      return belakang.test(d.label) && !hindari.test(d.label);
+    });
+    if (kandidat) return kandidat.deviceId;
+
+    // 2) Kalau label tidak jelas, ambil kamera belakang apa saja
+    kandidat = devices.find(function (d) { return belakang.test(d.label); });
+    if (kandidat) return kandidat.deviceId;
+
+    // 3) Fallback: device terakhir (biasanya kamera belakang di banyak HP)
+    return devices[devices.length - 1].deviceId;
   }
 
-  function onScanFailure(error) { /* Abaikan, ini terpanggil terus tiap frame yang gagal decode */ }
+  function isiDropdownKamera() {
+    var select = document.getElementById("cameraSelect");
+    select.innerHTML = "";
+    daftarKamera.forEach(function (d) {
+      var opt = document.createElement("option");
+      opt.value = d.deviceId;
+      opt.textContent = d.label || "Kamera";
+      select.appendChild(opt);
+    });
+  }
+
+  function gantiKamera(deviceId) {
+    mulaiScan(deviceId);
+  }
+
+  function mulaiScan(deviceId) {
+    kameraAktifId = deviceId;
+    document.getElementById("cameraSelect").value = deviceId || "";
+
+    codeReader.reset();
+    codeReader.decodeFromVideoDevice(deviceId, "scannerVideo", function (result, err) {
+      if (sudahDapatHasil) return;
+      if (result) {
+        sudahDapatHasil = true;
+        var teks = result.getText().trim();
+        document.getElementById("searchInput").value = teks;
+        tutupScanner();
+        eksekusiPencarian();
+      }
+      // err terpanggil terus tiap frame yang belum ketemu kode -> diabaikan (normal)
+    });
+  }
+
+  function tutupScanner() {
+    codeReader.reset();
+    document.getElementById("scannerOverlay").classList.remove("active");
+  }
+
+  // Tap layar video untuk minta browser fokus ulang (best-effort, tidak semua HP mendukung)
+  document.getElementById("scannerVideoWrap").addEventListener("click", function () {
+    var video = document.getElementById("scannerVideo");
+    var stream = video.srcObject;
+    if (!stream) return;
+    var track = stream.getVideoTracks()[0];
+    if (track && track.getCapabilities && track.getCapabilities().focusMode) {
+      track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(function () {});
+    }
+  });
 
   // ==========================================
-  // LOGIKA PENCARIAN (fetch ke Apps Script, bukan google.script.run)
+  // LOGIKA PENCARIAN (fetch ke Apps Script)
   // ==========================================
   document.getElementById("searchInput").addEventListener("keyup", function (event) {
     if (event.key === "Enter") eksekusiPencarian();
